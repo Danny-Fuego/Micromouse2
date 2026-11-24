@@ -7,7 +7,8 @@
 #include "bno055.h"
 #include "button.h"
 #include "speed_controller.h"
-#include "motion_profile.h"
+#include "motion_controller.h"
+#include "ramp_profile.h"
 #include "straight_controller.h"
 #include "motion_guard.h"
 #include <math.h>
@@ -17,5 +18,6 @@
 #include <stdarg.h>
 
 void Calibration_Run(void);
+// calibration.h — add these
 
 #endif

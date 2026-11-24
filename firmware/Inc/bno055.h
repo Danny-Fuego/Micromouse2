@@ -72,4 +72,22 @@ BNO055_Status BNO055_ReadGyro(I2C_HandleTypeDef *hi2c, BNO055_Gyro *gyro);
 
 float BNO055_AngleError(float target_deg, float current_deg);
 
+BNO055_Status BNO055_Step2_StartRead(I2C_HandleTypeDef *hi2c);
+uint8_t       BNO055_Step2_DidCallbackFire(void);
+BNO055_Status BNO055_Step3_StartRead(I2C_HandleTypeDef *hi2c);
+
+BNO055_Status BNO055_StartAsyncHeadingRead(I2C_HandleTypeDef *hi2c);
+uint8_t       BNO055_AsyncHeadingReady(void);
+float         BNO055_GetAsyncHeading(void);
+uint32_t      BNO055_GetAsyncErrorCount(void);
+uint32_t      BNO055_GetAsyncRecoveryCount(void);
+void          BNO055_RecoverI2CBus(I2C_HandleTypeDef *hi2c);
+uint32_t      BNO055_GetAsyncStartAttempts(void);
+uint32_t      BNO055_GetAsyncStartFailures(void);
+uint32_t      BNO055_GetAsyncCallbackFires(void);
+
+BNO055_Status BNO055_StartAsyncGyroRead(I2C_HandleTypeDef *hi2c);
+uint8_t       BNO055_AsyncGyroReady(void);
+float         BNO055_GetAsyncGyroZ(void);
+
 #endif

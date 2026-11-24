@@ -27,3 +27,10 @@ uint8_t Button_WasPressed(void){
 	last_state = current;
 	return 0;
 }
+
+void Wait_For_Button(void)
+{
+    Button_Init();
+    while (!Button_WasPressed()) { HAL_Delay(5); }
+    HAL_Delay(200);
+}

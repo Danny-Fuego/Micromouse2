@@ -1,0 +1,18 @@
+# macOS
+.DS_Store
+# STM32CubeIDE build output and local settings
+Debug/
+Release/
+*.o
+*.d
+*.su
+*.elf
+*.map
+*.list
+*.launch
+.settings/
+# ST HAL drivers are regenerated from the .ioc file
+Drivers/
+# run logs and scratch
+backup_before_run_clock/
+*.log

@@ -22,6 +22,15 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "calibration.h"
+#include "ramp_profile.h"
+#include "motion_controller.h"
+#include "bno055.h"
+#include "motion_state.h"
+#include "bt.h"
+#include "dummy_maze.h"
+#include "button.h"
+#include "maze_solver.h"
+#include "maze_solver2.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -33,7 +42,11 @@
 /* USER CODE BEGIN PD */
 #define MODE_CALIBRATION  0
 #define MODE_RUN          1
-#define CURRENT_MODE      MODE_CALIBRATION
+#define CURRENT_MODE      1
+#define TEST_DUMMY_MAZE   0
+#define TEST_MAZE_SOLVER  0
+#define TEST_MAZE_SOLVER  0
+#define TEST_MAZE_SOLVER2 1
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -54,7 +67,24 @@ TIM_HandleTypeDef htim4;
 UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
-
+volatile float g_forwardSpeed_mm_s = 0.0f;
+volatile uint32_t g_systickMaxCycles = 0;
+volatile uint32_t g_systickLastCycles = 0;
+volatile float g_currentHeading = 0.0f;
+volatile float g_currentGyroZ = 0.0f;
+volatile float g_rotationTargetHeading = 0.0f;
+volatile uint8_t g_spinTurnActive = 0;
+volatile uint8_t g_irSteerOffInArc = 0;   // 0 = unchanged behaviour, 1 = no IR steering while an arc is running
+volatile uint8_t g_rotationBraked = 0;
+volatile uint8_t g_systickBnoEnabled = 0;
+volatile uint32_t g_systickTickCount = 0;
+volatile uint8_t g_motionControlEnabled = 0;
+volatile uint8_t g_robotIsMoving = 0;   // safe default: not moving
+volatile uint32_t g_runStartTick = 0;   // HAL tick when the start button was pressed (run clock, see main.h)
+volatile uint8_t  g_runClockArmed = 0;  // 1 = SysTick is counting the run clock
+volatile uint8_t  g_runExpired = 0;     // 1 = the run time limit has passed: motors are cut, solver must stop
+uint8_t bnoChipID = 0;
+BNO055_Status bnoStatus;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -113,15 +143,72 @@ int main(void)
   MX_USART2_UART_Init();
   MX_ADC1_Init();
   /* USER CODE BEGIN 2 */
+  CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+  DWT->CYCCNT = 0;
+  DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+  BNO055_Reset();
+  bnoStatus = BNO055_ReadChipID(&hi2c1, &bnoChipID);
+  if ((bnoStatus != BNO055_OK) || (bnoChipID != BNO055_CHIP_ID_VALUE))
+  {
+	  while (1) { HAL_Delay(1000); }
+  }
+  bnoStatus = BNO055_Init(&hi2c1);
+  if (bnoStatus != BNO055_OK)
+  {
+	  while (1) { HAL_Delay(1000); }
+  }
+  bnoStatus = BNO055_SetMode(&hi2c1, BNO055_MODE_IMUPLUS);
+  if (bnoStatus != BNO055_OK)
+  {
+	  while (1) { HAL_Delay(1000); }
+  }
+  HAL_Delay(100);
+  g_systickBnoEnabled = 1;
+  MotionState_Init();
   #if CURRENT_MODE == MODE_CALIBRATION
      Calibration_Run();
   #endif
+#if TEST_DUMMY_MAZE
+    Wait_For_Button();
+    Encoder_Init();
+    Motor_Init();
+    Motor_Enable();
+    HAL_Delay(500);
+    BT_SendLine("===== DUMMY MAZE READY =====");
+    Wait_For_Button();
+    DummyMaze_Run(30);
+#endif
+#if TEST_MAZE_SOLVER
+    Wait_For_Button();
+	Encoder_Init();
+	Motor_Init();
+	Motor_Enable();
+	HAL_Delay(500);
+	BT_SendLine("===== MAZE SOLVER READY =====");
+	Wait_For_Button();
+	Maze_Run(100);
+#endif
+#if TEST_MAZE_SOLVER2
+    Wait_For_Button();
+	Encoder_Init();
+	Motor_Init();
+	Motor_Enable();
+	HAL_Delay(500);
+	BT_SendLine("===== MAZE SOLVER READY =====");
+	Wait_For_Button();
+	g_runExpired = 0;                  // start the run clock at the button press
+	g_runStartTick = HAL_GetTick();
+	g_runClockArmed = 1;
+	Maze_Run2(100);
+	g_runClockArmed = 0;
+#endif
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */

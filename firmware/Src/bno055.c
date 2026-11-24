@@ -71,13 +71,6 @@ BNO055_Status BNO055_Init(I2C_HandleTypeDef *hi2c){
 	if (st != BNO055_OK) return st;
 	HAL_Delay(10);
 
-	// Units:
-	// orientation = Windows
-	// temp = C
-	// Euler = degrees
-	// gyro = dps
-	// accel = m/s^2
-
 	st = BNO055_WriteByte(hi2c, BNO055_REG_UNIT_SEL, 0x00);
 	if (st != BNO055_OK) return st;
 
@@ -85,7 +78,6 @@ BNO055_Status BNO055_Init(I2C_HandleTypeDef *hi2c){
 	if (st != BNO055_OK) return st;
 	HAL_Delay(10);
 
-	// Absolute heading
 	st = BNO055_WriteByte(hi2c, BNO055_REG_OPR_MODE, BNO055_MODE_NDOF);
 	if (st != BNO055_OK) return st;
 	HAL_Delay(30);
@@ -107,7 +99,6 @@ BNO055_Status BNO055_ReadEuler(I2C_HandleTypeDef *hi2c, BNO055_Euler *euler){
 	raw_roll = (int16_t)((buf[3] << 8) | buf[2]);
 	raw_pitch = (int16_t)((buf[5] << 8) | buf[4]);
 
-	// BNO055 Euler output scale: 1 degree = 16 LSB
 	euler->heading_deg = raw_heading / 16.0f;
 	euler->roll_deg = raw_roll / 16.0f;
 	euler->pitch_deg = raw_pitch / 16.0f;
@@ -180,4 +171,160 @@ float BNO055_AngleError(float target_deg, float current_deg){
 	while (err < -180.0f) err += 360.0f;
 
 	return err;
+}
+
+/* ── Non-blocking async heading + gyro read, with request tracking, watchdog + bus recovery ───────── */
+
+typedef enum { BNO_REQUEST_NONE, BNO_REQUEST_HEADING, BNO_REQUEST_GYRO } BnoRequestType;
+static volatile BnoRequestType currentBnoRequest = BNO_REQUEST_NONE;
+
+static volatile uint8_t  asyncHeadingPending = 0;
+static uint8_t            asyncHeadingBuf[6];
+static volatile float     asyncLatestHeading = 0.0f;
+static I2C_HandleTypeDef *asyncHi2c = NULL;
+static volatile uint32_t  asyncErrorCount = 0;
+static volatile uint32_t  asyncRecoveryCount = 0;
+static volatile uint32_t  asyncStartTick = 0;
+static volatile uint32_t  asyncStartAttempts = 0;
+static volatile uint32_t  asyncStartFailures = 0;
+static volatile uint32_t  asyncCallbackFires = 0;
+
+static volatile uint8_t  asyncGyroPending = 0;
+static uint8_t            asyncGyroBuf[6];
+static volatile float     asyncLatestGyroZ = 0.0f;
+static I2C_HandleTypeDef *asyncGyroHi2c = NULL;
+static volatile uint32_t  asyncGyroStartTick = 0;
+
+#define ASYNC_I2C_TIMEOUT_MS 20
+
+void BNO055_RecoverI2CBus(I2C_HandleTypeDef *hi2c)
+{
+    HAL_I2C_DeInit(hi2c);
+
+    GPIO_InitTypeDef gpio = {0};
+    gpio.Mode  = GPIO_MODE_OUTPUT_OD;
+    gpio.Pull  = GPIO_PULLUP;
+    gpio.Speed = GPIO_SPEED_FREQ_LOW;
+    gpio.Pin   = GYRO_SCL_Pin;
+    HAL_GPIO_Init(GYRO_SCL_GPIO_Port, &gpio);
+
+    for (int i = 0; i < 9; i++)
+    {
+        HAL_GPIO_WritePin(GYRO_SCL_GPIO_Port, GYRO_SCL_Pin, GPIO_PIN_RESET);
+        HAL_Delay(1);
+        HAL_GPIO_WritePin(GYRO_SCL_GPIO_Port, GYRO_SCL_Pin, GPIO_PIN_SET);
+        HAL_Delay(1);
+    }
+
+    HAL_I2C_Init(hi2c);
+    asyncRecoveryCount++;
+    currentBnoRequest = BNO_REQUEST_NONE;
+}
+
+BNO055_Status BNO055_StartAsyncHeadingRead(I2C_HandleTypeDef *hi2c)
+{
+    if (asyncHeadingPending)
+    {
+        if ((HAL_GetTick() - asyncStartTick) > ASYNC_I2C_TIMEOUT_MS)
+        {
+            BNO055_RecoverI2CBus(hi2c);
+            asyncHeadingPending = 0;
+        }
+        else
+        {
+            return BNO055_OK;
+        }
+    }
+
+    asyncHi2c = hi2c;
+    asyncHeadingPending = 1;
+    asyncStartTick = HAL_GetTick();
+    asyncStartAttempts++;
+    currentBnoRequest = BNO_REQUEST_HEADING;
+
+    if (HAL_I2C_Mem_Read_IT(hi2c, BNO055_I2C_ADDR, BNO055_REG_EUL_HEADING_LSB,
+                             I2C_MEMADD_SIZE_8BIT, asyncHeadingBuf, 6) != HAL_OK)
+    {
+        asyncHeadingPending = 0;
+        asyncStartFailures++;
+        currentBnoRequest = BNO_REQUEST_NONE;
+        return BNO055_ERR_I2C;
+    }
+
+    return BNO055_OK;
+}
+
+BNO055_Status BNO055_StartAsyncGyroRead(I2C_HandleTypeDef *hi2c)
+{
+    if (asyncGyroPending)
+    {
+        if ((HAL_GetTick() - asyncGyroStartTick) > ASYNC_I2C_TIMEOUT_MS)
+        {
+            BNO055_RecoverI2CBus(hi2c);
+            asyncGyroPending = 0;
+        }
+        else
+        {
+            return BNO055_OK;
+        }
+    }
+
+    asyncGyroHi2c = hi2c;
+    asyncGyroPending = 1;
+    asyncGyroStartTick = HAL_GetTick();
+    currentBnoRequest = BNO_REQUEST_GYRO;
+
+    if (HAL_I2C_Mem_Read_IT(hi2c, BNO055_I2C_ADDR, BNO055_REG_GYR_DATA_X_LSB,
+                             I2C_MEMADD_SIZE_8BIT, asyncGyroBuf, 6) != HAL_OK)
+    {
+        asyncGyroPending = 0;
+        currentBnoRequest = BNO_REQUEST_NONE;
+        return BNO055_ERR_I2C;
+    }
+
+    return BNO055_OK;
+}
+
+uint8_t BNO055_AsyncHeadingReady(void) { return !asyncHeadingPending; }
+float   BNO055_GetAsyncHeading(void)   { return asyncLatestHeading; }
+uint8_t BNO055_AsyncGyroReady(void)    { return !asyncGyroPending; }
+float   BNO055_GetAsyncGyroZ(void)     { return asyncLatestGyroZ; }
+
+uint32_t BNO055_GetAsyncErrorCount(void)      { return asyncErrorCount; }
+uint32_t BNO055_GetAsyncRecoveryCount(void)   { return asyncRecoveryCount; }
+uint32_t BNO055_GetAsyncStartAttempts(void)   { return asyncStartAttempts; }
+uint32_t BNO055_GetAsyncStartFailures(void)   { return asyncStartFailures; }
+uint32_t BNO055_GetAsyncCallbackFires(void)   { return asyncCallbackFires; }
+
+void HAL_I2C_MemRxCpltCallback(I2C_HandleTypeDef *hi2c)
+{
+    if (currentBnoRequest == BNO_REQUEST_HEADING)
+    {
+        int16_t raw_heading = (int16_t)((asyncHeadingBuf[1] << 8) | asyncHeadingBuf[0]);
+        asyncLatestHeading = raw_heading / 16.0f;
+        asyncHeadingPending = 0;
+        asyncCallbackFires++;
+    }
+    else if (currentBnoRequest == BNO_REQUEST_GYRO)
+    {
+        int16_t raw_z = (int16_t)((asyncGyroBuf[5] << 8) | asyncGyroBuf[4]);
+        asyncLatestGyroZ = raw_z / 16.0f;
+        asyncGyroPending = 0;
+    }
+    currentBnoRequest = BNO_REQUEST_NONE;
+}
+
+void HAL_I2C_ErrorCallback(I2C_HandleTypeDef *hi2c)
+{
+    if (currentBnoRequest == BNO_REQUEST_HEADING)
+    {
+        asyncErrorCount++;
+        asyncHeadingPending = 0;
+    }
+    else if (currentBnoRequest == BNO_REQUEST_GYRO)
+    {
+        asyncErrorCount++;
+        asyncGyroPending = 0;
+    }
+    currentBnoRequest = BNO_REQUEST_NONE;
 }

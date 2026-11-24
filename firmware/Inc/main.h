@@ -31,6 +31,26 @@ extern "C" {
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+extern volatile float g_forwardSpeed_mm_s;
+extern volatile uint32_t g_systickMaxCycles;
+extern volatile uint32_t g_systickLastCycles;
+extern volatile float g_currentHeading;
+extern volatile float g_currentGyroZ;
+extern volatile float g_rotationTargetHeading;
+extern volatile uint8_t g_rotationBraked;
+extern volatile uint8_t g_spinTurnActive;
+extern volatile uint8_t g_irSteerOffInArc;
+extern volatile uint8_t g_systickBnoEnabled;
+extern volatile uint32_t g_systickTickCount;
+extern volatile uint8_t g_motionControlEnabled;
+extern volatile uint8_t g_robotIsMoving;
+
+// RUN CLOCK (new): the 10-minute limit. main.c arms it when the start button is pressed, SysTick_Handler counts it
+// and, when it runs out, sets g_runExpired and cuts the motors. The solver only LOOKS at g_runExpired.
+#define RUN_TIME_LIMIT_MS  600000UL
+extern volatile uint32_t g_runStartTick;
+extern volatile uint8_t  g_runClockArmed;
+extern volatile uint8_t  g_runExpired;
 
 /* USER CODE END Includes */
 
@@ -71,6 +91,8 @@ void Error_Handler(void);
 #define IR_EMITTER_L_GPIO_Port GPIOA
 #define IR_RECEIVER_L_Pin GPIO_PIN_7
 #define IR_RECEIVER_L_GPIO_Port GPIOA
+#define BATTERY_VOLTAGE_Pin GPIO_PIN_1
+#define BATTERY_VOLTAGE_GPIO_Port GPIOB
 #define BUTTON_Pin GPIO_PIN_12
 #define BUTTON_GPIO_Port GPIOB
 #define ENCODER_LEFT_B_Pin GPIO_PIN_8
@@ -102,7 +124,8 @@ void Error_Handler(void);
 #define GYRO_SDA_GPIO_Port GPIOB
 
 /* USER CODE BEGIN Private defines */
-
+#define ROT_FINAL_ANGLE_TOLERANCE_DEG  3.0f
+#define SPIN_TURN_ANOMALY_THRESHOLD_DEG  20.0f
 /* USER CODE END Private defines */
 
 #ifdef __cplusplus

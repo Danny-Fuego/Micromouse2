@@ -9,7 +9,6 @@
 #define SPEED_KD 0.0f
 #define ENABLE_DECEL_BIAS 0
 
-#define MIN_USABLE_SPEED_MM_S 430.0f
 
 static int32_t prevLeftCount  = 0;
 static int32_t prevRightCount = 0;
@@ -28,31 +27,48 @@ static int16_t rightPWM = 0;
 
 static uint8_t hasStarted = 0;
 
-#define LOOKUP_SIZE_L 10
-#define LOOKUP_SIZE_R 12
+static float minUsableSpeed_mm_s = 0.0f; // computed at init not hardcoded
 
-// Left motor (new replacement) — calibrated 2026-07-08
-// Deadzone below 500 PWM — motor spins but can't break friction
+
+#define LOOKUP_SIZE_L 9
+#define LOOKUP_SIZE_R 10
+
+static float leftPWMTrim[LOOKUP_SIZE_L] = {0};
+static float rightPWMTrim[LOOKUP_SIZE_R] = {0};
+
+// Left motor — recalibrated, averaged across 3 runs (charged/rested battery)
+// Deadzone below 600 PWM — breakaway is inconsistent/unreliable in the
+// 400-550 range across repeated runs, so the floor is set safely above it
+// rather than at the literal (unreliable) edge.
 static const float leftSpeedBP[LOOKUP_SIZE_L] = {
-    0.0f, 430.0f, 530.0f, 610.0f, 675.0f,
-    735.0f, 795.0f, 880.0f, 968.0f, 1057.0f
+    0.0f,   600.0f,  670.0f,  735.0f,  845.0f,
+    945.0f, 1055.0f, 1140.0f, 1370.0f
 };
 static const float leftPWMTable[LOOKUP_SIZE_L] = {
-    0.0f, 450.0f, 500.0f, 550.0f, 600.0f,
-    650.0f, 700.0f, 750.0f, 800.0f, 850.0f
+    0.0f, 600.0f, 650.0f, 700.0f, 750.0f,
+    800.0f, 850.0f, 900.0f, 1000.0f
 };
 
-// Right motor — calibrated 2026-07-08
+// Right motor — recalibrated, averaged across 3 runs (charged/rested battery)
+// Deadzone below 600 PWM — same reasoning as left; right showed the most
+// dramatic run-to-run swing at 550 PWM (0, ~400, 0 across the 3 runs).
 static const float rightSpeedBP[LOOKUP_SIZE_R] = {
-    0.0f, 264.0f, 379.0f, 472.0f, 544.0f,
-    609.0f, 667.0f, 731.0f, 832.0f, 948.0f,
-    1052.0f, 1135.0f
+    0.0f,   495.0f,  575.0f,  670.0f,  790.0f,
+    925.0f, 1060.0f, 1155.0f, 1275.0f, 1415.0f
 };
 static const float rightPWMTable[LOOKUP_SIZE_R] = {
-    0.0f, 400.0f, 450.0f, 500.0f, 550.0f,
-    600.0f, 650.0f, 700.0f, 750.0f, 800.0f,
-    850.0f, 900.0f
+    0.0f, 600.0f, 650.0f, 700.0f, 750.0f,
+    800.0f, 850.0f, 900.0f, 950.0f, 1000.0f
 };
+
+static void Controller_ComputeMinUsableSpeed(void){
+    // The first non-zero breakpoint in each table is that motor's real
+    // deadzone edge. Use the higher of the two, so the startup gate
+    // doesn't release until BOTH motors can actually respond.
+	float leftEdge = leftSpeedBP[1];
+	float rightEdge = rightSpeedBP[1];
+	minUsableSpeed_mm_s = (leftEdge > rightEdge) ? leftEdge : rightEdge;
+}
 
 static int16_t Controller_ClampPWM(float pwm)
 {
@@ -114,7 +130,9 @@ static float Controller_PID(float target,
     return (SPEED_KP * error) + (SPEED_KI * (*integral)) + (SPEED_KD * derivative);
 }
 
-void Controller_Init(void) { Controller_Reset(); }
+void Controller_Init(void) {
+	Controller_ComputeMinUsableSpeed();
+	Controller_Reset(); }
 
 void Controller_Reset(void)
 {
@@ -144,8 +162,8 @@ void Controller_UpdateSpeed(float targetLeft_mm_s,
     // Startup gate
     if (!hasStarted)
     {
-        if (fabsf(targetLeft_mm_s)  < MIN_USABLE_SPEED_MM_S &&
-            fabsf(targetRight_mm_s) < MIN_USABLE_SPEED_MM_S)
+        if (fabsf(targetLeft_mm_s)  < minUsableSpeed_mm_s &&
+            fabsf(targetRight_mm_s) < minUsableSpeed_mm_s)
         {
             leftPWM  = 0;
             rightPWM = 0;
@@ -174,13 +192,13 @@ void Controller_UpdateSpeed(float targetLeft_mm_s,
     float rightFeedforward = Controller_LookupRightPWM(targetRight_mm_s);
 
     // Average feedforward below 700mm/s during startup ramp
-    if (fabsf(targetLeft_mm_s)  < 700.0f &&
-        fabsf(targetRight_mm_s) < 700.0f)
-    {
-        float avgFF = 0.5f * (leftFeedforward + rightFeedforward);
-        leftFeedforward  = avgFF;
-        rightFeedforward = avgFF;
-    }
+//    if (fabsf(targetLeft_mm_s)  < 700.0f &&
+//        fabsf(targetRight_mm_s) < 700.0f)
+//    {
+//        float avgFF = 0.5f * (leftFeedforward + rightFeedforward);
+//        leftFeedforward  = avgFF;
+//        rightFeedforward = avgFF;
+//    }
 
     float leftCorrection =
         Controller_PID(targetLeft_mm_s,  leftMeasuredSpeed,

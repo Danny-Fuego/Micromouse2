@@ -3,6 +3,9 @@
 #include "main.h"
 #include <stdint.h>
 
+#define MM_PER_TICK_LEFT   0.595f
+#define MM_PER_TICK_RIGHT  0.595f
+
 void Encoder_Init(void);
 void Encoder_ResetAll(void);
 void Encoder_ResetLeft(void);
